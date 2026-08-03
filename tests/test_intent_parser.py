@@ -70,6 +70,7 @@ def test_tokens_are_reported(monkeypatch):
         '["entity", "user_context", "reasoning_paths"]',
         '"just a string"',
         '{"entity": "Trump", "user_context": "hospital business"}',
+        '{"entity": "Trump", "user_context": "hospitals", "reasoning_paths": []}',
     ],
 )
 def test_json_missing_required_keys_routes_to_clarification(monkeypatch, content):
@@ -124,5 +125,5 @@ def test_ollama_failure_returns_error_status(monkeypatch, tmp_path):
     result = parse_intent("Trump affects my hospital business")
 
     assert result["status"] == "error"
-    assert "connection refused" in result["message"]
+    assert "connection refused" in result["error"]
     assert "connection refused" in log_path.read_text()

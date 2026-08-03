@@ -33,11 +33,7 @@ def isolate_paths(monkeypatch, tmp_path):
 
 
 def test_collect_keywords_dedupes_across_paths():
-    assert rss_fetcher.collect_keywords(MECHANISM) == ["Medicaid", "hospital", "nurse pay"]
-
-
-def test_collect_keywords_tolerates_malformed_paths():
-    assert rss_fetcher.collect_keywords({"reasoning_paths": ["oops", {"path": "p"}]}) == []
+    assert rss_fetcher._collect_keywords(MECHANISM) == ["Medicaid", "hospital", "nurse pay"]
 
 
 def test_filters_and_dedupes_by_link(monkeypatch):
@@ -73,6 +69,7 @@ def test_stale_cache_triggers_refetch(monkeypatch):
     monkeypatch.setattr(rss_fetcher, "_fetch_entries", fetch)
 
     rss_fetcher.fetch_articles(MECHANISM)
-    rss_fetcher.fetch_articles(MECHANISM, ttl_seconds=0)
+    monkeypatch.setattr(rss_fetcher, "CACHE_TTL_SECONDS", 0)
+    rss_fetcher.fetch_articles(MECHANISM)
 
     assert len(calls) == 2

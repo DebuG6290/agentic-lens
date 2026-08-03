@@ -1,20 +1,19 @@
 """
 utils.py
-Shared helpers: JSONL logging, tolerant JSON parsing, Ollama call wrapper.
-Used by intent_parser.py and classifier.py so the logic isn't duplicated.
+Shared helpers for the pipeline: JSONL logging, lenient JSON parsing and a
+guarded Ollama call wrapper. Kept raw/framework-free on purpose.
 """
 
 import json
 import time
 from pathlib import Path
-
 import ollama
 
 LOG_PATH = Path("data/logs.jsonl")
 MODEL = "llama3.2:latest"
 
 
-def log(stage: str, input_data: dict, output_data: dict, tokens: dict):
+def _log(stage: str, input_data: dict, output_data: dict, tokens: dict):
     entry = {
         "timestamp": time.time(),
         "stage": stage,
@@ -27,30 +26,21 @@ def log(stage: str, input_data: dict, output_data: dict, tokens: dict):
         f.write(json.dumps(entry) + "\n")
 
 
-def strip_fences(text: str) -> str:
-    """Removes surrounding markdown code fences and an optional language tag."""
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned[3:]
-        newline = cleaned.find("\n")
-        first_line = cleaned[:newline] if newline != -1 else cleaned
-        if first_line.strip().isalpha():
-            cleaned = cleaned[newline + 1:] if newline != -1 else ""
-        cleaned = cleaned.strip()
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:-3].strip()
-    return cleaned
-
-
-def try_parse_json(text: str):
-    """Parses JSON out of a model response, tolerating fences and stray prose.
-
-    Returns the parsed value, or None if nothing parseable is found.
-    """
+def _try_parse_json(text: str):
+    """Returns dict if text contains JSON (fences tolerated), else None."""
     if not text:
         return None
 
-    cleaned = strip_fences(text)
+    cleaned = text.strip()
+
+    if cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+        if cleaned[:4].lower() == "json":
+            cleaned = cleaned[4:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
@@ -58,37 +48,34 @@ def try_parse_json(text: str):
 
     start = cleaned.find("{")
     end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end < start:
+    if start == -1 or end <= start:
         return None
+
     try:
-        return json.loads(cleaned[start:end + 1])
+        return json.loads(cleaned[start : end + 1])
     except json.JSONDecodeError:
         return None
 
 
-def is_mechanism_object(candidate) -> bool:
-    """True when the parsed result is a dict carrying every required key."""
-    required = ("entity", "user_context", "reasoning_paths")
-    return isinstance(candidate, dict) and all(key in candidate for key in required)
-
-
-def call_ollama(stage: str, messages: list, input_data: dict, model: str = MODEL) -> dict:
-    """Calls Ollama and logs the result.
-
-    Returns {"ok": True, "text": str, "tokens": dict} on success, or
-    {"ok": False, "error": str} when the model or server is unreachable.
+def call_ollama(stage: str, messages: list, input_data: dict) -> dict:
     """
+    Calls Ollama and returns {"ok": True, "text": str, "tokens": dict} or
+    {"ok": False, "error": str, "tokens": dict} when the model/server is
+    unreachable. Every call (success or failure) is logged.
+    """
+    zero_tokens = {"prompt": 0, "completion": 0, "total": 0}
+
     try:
-        response = ollama.chat(model=model, messages=messages)
-    except Exception as exc:
-        message = f"{type(exc).__name__}: {exc}"
-        log(
+        response = ollama.chat(model=MODEL, messages=messages)
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"
+        _log(
             stage=stage,
             input_data=input_data,
-            output_data={"error": message},
-            tokens={"prompt": 0, "completion": 0, "total": 0},
+            output_data={"error": error},
+            tokens=zero_tokens,
         )
-        return {"ok": False, "error": message}
+        return {"ok": False, "error": error, "tokens": zero_tokens}
 
     text = response["message"]["content"]
     tokens = {
@@ -97,10 +84,11 @@ def call_ollama(stage: str, messages: list, input_data: dict, model: str = MODEL
     }
     tokens["total"] = tokens["prompt"] + tokens["completion"]
 
-    log(
+    _log(
         stage=stage,
         input_data=input_data,
         output_data={"raw_output": text},
         tokens=tokens,
     )
+
     return {"ok": True, "text": text, "tokens": tokens}

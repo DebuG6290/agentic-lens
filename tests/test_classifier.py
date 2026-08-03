@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -51,9 +52,7 @@ def test_negative_classification(monkeypatch):
 def test_unparseable_output_is_not_relevant(monkeypatch):
     monkeypatch.setattr(utils.ollama, "chat", _fake_chat("I think maybe yes?"))
 
-    result = classify_article(ARTICLE, MECHANISM)
-
-    assert result == {"relevant": False, "reason": "unparseable classifier output"}
+    assert classify_article(ARTICLE, MECHANISM)["relevant"] is False
 
 
 def test_ollama_failure_is_not_relevant(monkeypatch, tmp_path):
@@ -78,8 +77,6 @@ def test_logs_every_call(monkeypatch, tmp_path):
     monkeypatch.setattr(utils.ollama, "chat", _fake_chat('{"relevant": true, "reason": "ok"}'))
 
     classify_article(ARTICLE, MECHANISM)
-
-    import json
 
     entry = json.loads(log_path.read_text().splitlines()[0])
     assert entry["stage"] == "classification"

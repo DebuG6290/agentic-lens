@@ -14,7 +14,7 @@ result = parse_intent("Trump affects my hospital business")
 print("STATUS:", result["status"])
 
 if result["status"] == "error":
-    print("ERROR:", result["message"])
+    print("ERROR:", result["error"])
     sys.exit(1)
 
 print("TOKENS:", result["tokens"])
@@ -28,7 +28,7 @@ if result["status"] == "needs_clarification":
     print("\nSTATUS:", result2["status"])
 
     if result2["status"] == "error":
-        print("ERROR:", result2["message"])
+        print("ERROR:", result2["error"])
         sys.exit(1)
 
     print("TOKENS:", result2["tokens"])

@@ -1,11 +1,13 @@
 """
 main.py
-v1 orchestrator: user intent -> mechanism object -> RSS fetch/filter -> classify -> daily digest.
-Run from the repo root: python src/main.py "Trump affects my hospital business"
+End-to-end v1 pipeline: user intent -> mechanism object -> RSS fetch/filter ->
+per-article classification -> daily digest printed to stdout.
+
+Run from the repo root (paths to prompts/ and data/ are relative):
+    python src/main.py
 """
 
 import sys
-from datetime import date
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent))
@@ -15,67 +17,67 @@ from intent_parser import parse_intent
 from rss_fetcher import fetch_articles
 
 
-def render_digest(mechanism_object: dict, results: list) -> str:
-    lines = [
-        f"Daily digest - {date.today().isoformat()}",
-        f"Entity: {mechanism_object.get('entity')}",
-        f"Context: {mechanism_object.get('user_context')}",
-        "",
-    ]
-    relevant = [r for r in results if r["classification"]["relevant"]]
-    if not relevant:
-        lines.append("No relevant articles today.")
-        return "\n".join(lines)
+def resolve_mechanism(user_intent: str) -> dict:
+    """Runs the clarification loop until a complete mechanism object or an error."""
+    result = parse_intent(user_intent)
 
-    for item in relevant:
-        article = item["article"]
-        lines.append(f"- {article['title']}")
-        lines.append(f"  {article['link']}")
-        lines.append(f"  why: {item['classification']['reason']}")
-        lines.append("")
+    while result["status"] == "needs_clarification":
+        print("\nI need a bit more detail:\n")
+        print(result["questions"])
+        answer = input("\nYour answer: ").strip()
+        if not answer:
+            return {"status": "error", "error": "no answer provided"}
+        result = parse_intent(answer, conversation_history=result["history"])
+
+    return result
+
+
+def render_digest(user_intent: str, articles: list) -> str:
+    lines = ["", "=" * 60, f"DAILY DIGEST - {user_intent}", "=" * 60]
+
+    if not articles:
+        lines.append("\nNothing relevant today.")
+    else:
+        for i, item in enumerate(articles, start=1):
+            lines.append(f"\n{i}. {item['title']}")
+            lines.append(f"   why: {item['reason']}")
+            lines.append(f"   {item['link']}")
+
+    lines.append("")
     return "\n".join(lines)
 
 
-def run(user_intent: str, conversation_history: list = None) -> dict:
-    """Runs the pipeline once. Returns the parse result plus a digest when complete."""
-    parsed = parse_intent(user_intent, conversation_history=conversation_history)
+def run(user_intent: str) -> str:
+    result = resolve_mechanism(user_intent)
 
-    if parsed["status"] != "complete":
-        return parsed
+    if result["status"] != "complete":
+        return f"Could not build a mechanism object: {result.get('error', result['status'])}"
 
-    mechanism_object = parsed["mechanism_object"]
-    articles = fetch_articles(mechanism_object)
+    mechanism_object = result["mechanism_object"]
+    print(f"\nEntity: {mechanism_object['entity']}")
+    print(f"Context: {mechanism_object['user_context']}")
+    print(f"Reasoning paths: {len(mechanism_object['reasoning_paths'])}")
 
-    results = []
-    for article in articles:
-        results.append(
-            {"article": article, "classification": classify_article(article, mechanism_object)}
-        )
+    candidates = fetch_articles(mechanism_object)
+    print(f"Keyword-matched articles: {len(candidates)}")
 
-    return {
-        "status": "complete",
-        "mechanism_object": mechanism_object,
-        "results": results,
-        "digest": render_digest(mechanism_object, results),
-    }
+    relevant = []
+    for article in candidates:
+        verdict = classify_article(article, mechanism_object)
+        if verdict["relevant"]:
+            relevant.append({**article, "reason": verdict["reason"]})
+
+    return render_digest(user_intent, relevant)
 
 
 def main():
     user_intent = " ".join(sys.argv[1:]).strip()
     if not user_intent:
-        user_intent = input("What do you want to track? ")
-
-    outcome = run(user_intent)
-
-    if outcome["status"] == "error":
-        print("ERROR:", outcome["message"])
+        user_intent = input("What do you want to track? ").strip()
+    if not user_intent:
+        print("No intent given.")
         return
-    if outcome["status"] == "needs_clarification":
-        print("The model needs more detail:\n")
-        print(outcome["questions"])
-        return
-
-    print(outcome["digest"])
+    print(run(user_intent))
 
 
 if __name__ == "__main__":
