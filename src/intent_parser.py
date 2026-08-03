@@ -5,35 +5,11 @@ Uses Ollama locally. Prompt lives in prompts/intent_decomposition.txt
 Logs every call (input, output, tokens) to data/logs.jsonl for debugging.
 """
 
-import json
-import time
 from pathlib import Path
-import ollama
 
-LOG_PATH = Path("data/logs.jsonl")
-MODEL = "llama3.2:latest"
+from utils import MODEL, call_ollama, is_mechanism_object, try_parse_json
+
 PROMPT_PATH = Path("prompts/intent_decomposition.txt")
-
-
-def _log(stage: str, input_data: dict, output_data: dict, tokens: dict):
-    entry = {
-        "timestamp": time.time(),
-        "stage": stage,
-        "input": input_data,
-        "output": output_data,
-        "tokens": tokens,
-    }
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(LOG_PATH, "a") as f:
-        f.write(json.dumps(entry) + "\n")
-
-
-def _try_parse_json(text: str):
-    """Returns dict if text is valid JSON, else None."""
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
 
 
 def parse_intent(user_input: str, conversation_history: list = None) -> dict:
@@ -44,27 +20,28 @@ def parse_intent(user_input: str, conversation_history: list = None) -> dict:
     messages += conversation_history
     messages.append({"role": "user", "content": user_input})
 
-    response = ollama.chat(model=MODEL, messages=messages)
-
-    output_text = response["message"]["content"]
-    tokens = {
-        "prompt": response.get("prompt_eval_count", 0),
-        "completion": response.get("eval_count", 0),
-    }
-    tokens["total"] = tokens["prompt"] + tokens["completion"]
-
-    _log(
+    result = call_ollama(
         stage="intent_decomposition",
+        messages=messages,
         input_data={"user_input": user_input, "history_len": len(conversation_history)},
-        output_data={"raw_output": output_text},
-        tokens=tokens,
+        model=MODEL,
     )
+    if not result["ok"]:
+        return {"status": "error", "message": result["error"]}
 
-    mechanism_object = _try_parse_json(output_text)
+    output_text = result["text"]
+    tokens = result["tokens"]
 
-    if mechanism_object:
+    mechanism_object = try_parse_json(output_text)
+
+    if is_mechanism_object(mechanism_object):
         return {"status": "complete", "mechanism_object": mechanism_object, "tokens": tokens}
     else:
-        # Model asked clarifying questions instead of giving JSON
+        # Model asked clarifying questions instead of giving a usable mechanism object
         updated_history = messages[1:] + [{"role": "assistant", "content": output_text}]
-        return {"status": "needs_clarification", "questions": output_text, "history": updated_history, "tokens": tokens}
+        return {
+            "status": "needs_clarification",
+            "questions": output_text,
+            "history": updated_history,
+            "tokens": tokens,
+        }

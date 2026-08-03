@@ -1,5 +1,8 @@
 venv/
 __pycache__/
 *.pyc
-data/rss_cache/*
 .env
+
+# runtime artifacts
+data/logs.jsonl
+data/rss_cache/
