@@ -1,5 +1,6 @@
 venv/
 __pycache__/
 *.pyc
-data/rss_cache/*
 .env
+data/logs.jsonl
+data/rss_cache/

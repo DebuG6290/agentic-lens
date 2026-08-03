@@ -9,11 +9,15 @@ result = parse_intent("Trump affects my hospital business")
 print("STATUS:", result["status"])
 print("TOKENS:", result["tokens"])
 
+if result["status"] == "error":
+    print("\nERROR:", result["error"])
+    sys.exit(1)
+
 if result["status"] == "needs_clarification":
     print("\nQUESTIONS FROM MODEL:\n", result["questions"])
 
     user_answer = input("\nYour answer: ")
-    result2 = parse_intent(user_answer, history=result["history"])
+    result2 = parse_intent(user_answer, conversation_history=result["history"])
 
     print("\nSTATUS:", result2["status"])
     print("TOKENS:", result2["tokens"])
