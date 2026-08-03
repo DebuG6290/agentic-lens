@@ -1,14 +1,17 @@
-# Lens (v1)
+# agentic-lens
 
-Local-only, framework-free news filtering. A user's free-text intent is decomposed by a local
-Ollama model (`llama3.2:latest`) into a *mechanism object*, which drives an RSS fetch and a
-per-article relevance pass, ending in a daily digest.
+Local-only news filtering. A user's free-text intent becomes a *mechanism object*
+(`entity`, `user_context`, `reasoning_paths`), which drives an RSS fetch and a
+per-article relevance pass, rendered as a daily digest. Everything runs against a
+local Ollama (`llama3.2:latest`); no frameworks.
+
+## Pipeline
 
 ```
-user intent -> src/intent_parser.py -> mechanism object
-            -> src/rss_fetcher.py   -> keyword-matched articles (single RSS source)
-            -> src/classifier.py    -> {relevant, reason} per article
-            -> src/main.py          -> daily digest
+intent -> src/intent_parser.py -> mechanism object
+       -> src/rss_fetcher.py   -> keyword-matched articles (single RSS source)
+       -> src/classifier.py    -> {relevant, reason} per article
+       -> src/main.py          -> digest
 ```
 
 ## Setup
@@ -20,31 +23,24 @@ ollama pull llama3.2:latest
 
 ## Run
 
-From the repo root (paths are resolved relative to the working directory):
+Paths to `prompts/` and `data/` are relative, so run from the repo root:
 
 ```bash
-python src/main.py "Trump affects my hospital business"
+python src/main.py
 ```
 
-Manual smoke test of the clarification loop: `python scripts/try_intent.py`.
+If the intent is ambiguous the parser asks 2-3 clarifying questions and loops.
 
 ## Tests
 
 ```bash
-pytest tests
+pytest                        # mocked ollama.chat, no model required
+python scripts/try_intent.py  # manual smoke test against a live Ollama
 ```
-
-The suite mocks `ollama.chat`, so it needs neither Ollama nor network access.
 
 ## Logs
 
-Every LLM call and each RSS fetch appends one JSON line to `data/logs.jsonl`
-(`timestamp`, `stage`, `input`, `output`, `tokens`). This file grows unbounded and is
-gitignored — clear or rotate it periodically:
-
-```bash
-: > data/logs.jsonl
-```
-
-Fetched feeds are cached in `data/rss_cache/` and reused within a freshness window
-(`CACHE_TTL_SECONDS` in `src/rss_fetcher.py`); it is safe to delete.
+Every LLM call and RSS fetch is appended to `data/logs.jsonl`
+(`timestamp`, `stage`, `input`, `output`, `tokens`). It is gitignored and grows
+unbounded — clear it periodically (`> data/logs.jsonl`). Feed responses are cached
+in `data/rss_cache/` with a 6-hour TTL.

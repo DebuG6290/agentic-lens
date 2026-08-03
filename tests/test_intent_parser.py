@@ -1,129 +1,130 @@
-import sys
-from pathlib import Path
+import json
 
 import pytest
-
-REPO_ROOT = Path(__file__).parent.parent
-sys.path.append(str(REPO_ROOT / "src"))
 
 import utils
 from intent_parser import parse_intent
 
-VALID_MECHANISM = """{
-  "entity": "Trump",
-  "user_context": "hospital business",
-  "reasoning_paths": [
-    {"path": "healthcare policy", "keywords": ["medicaid", "healthcare reform"]}
-  ]
-}"""
+MECHANISM = {
+    "entity": "Trump",
+    "user_context": "hospital business",
+    "reasoning_paths": [{"path": "healthcare policy", "keywords": ["medicaid"]}],
+}
+INTENT = "Trump affects my hospital business"
 
 
-def _fake_chat(content: str):
-    def chat(model, messages):
-        return {
-            "message": {"content": content},
-            "prompt_eval_count": 10,
-            "eval_count": 5,
-        }
+@pytest.fixture
+def model_says(monkeypatch):
+    """Make ollama.chat return a fixed string, and record the messages sent."""
+    calls = []
 
-    return chat
+    def _set(content):
+        def _chat(model, messages):
+            calls.append(messages)
+            return {
+                "message": {"content": content},
+                "prompt_eval_count": 10,
+                "eval_count": 5,
+            }
+
+        monkeypatch.setattr(utils.ollama, "chat", _chat)
+        return calls
+
+    return _set
 
 
-@pytest.fixture(autouse=True)
-def isolate_logs(monkeypatch, tmp_path):
-    monkeypatch.chdir(REPO_ROOT)
-    monkeypatch.setattr(utils, "LOG_PATH", tmp_path / "logs.jsonl")
-
-
-def test_strips_json_fenced_block(monkeypatch):
-    monkeypatch.setattr(utils.ollama, "chat", _fake_chat(f"```json\n{VALID_MECHANISM}\n```"))
-
-    result = parse_intent("Trump affects my hospital business")
-
+def test_plain_json_is_complete(model_says):
+    model_says(json.dumps(MECHANISM))
+    result = parse_intent(INTENT)
     assert result["status"] == "complete"
-    assert result["mechanism_object"]["entity"] == "Trump"
-
-
-def test_strips_plain_fences_and_preamble(monkeypatch):
-    noisy = f"Here is the mechanism object:\n```\n{VALID_MECHANISM}\n```\nHope that helps!"
-    monkeypatch.setattr(utils.ollama, "chat", _fake_chat(noisy))
-
-    result = parse_intent("Trump affects my hospital business")
-
-    assert result["status"] == "complete"
-    assert result["mechanism_object"]["user_context"] == "hospital business"
-
-
-def test_tokens_are_reported(monkeypatch):
-    monkeypatch.setattr(utils.ollama, "chat", _fake_chat(VALID_MECHANISM))
-
-    result = parse_intent("Trump affects my hospital business")
-
+    assert result["mechanism_object"] == MECHANISM
     assert result["tokens"] == {"prompt": 10, "completion": 5, "total": 15}
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "```json\n{body}\n```",
+        "```\n{body}\n```",
+        "   ```json\n{body}\n```   ",
+        "Here is the mechanism object:\n{body}\nLet me know if this helps!",
+        "```json\n{body}\n```\nHope that works.",
+    ],
+)
+def test_fence_and_prose_stripping(model_says, wrapper):
+    model_says(wrapper.format(body=json.dumps(MECHANISM)))
+    result = parse_intent(INTENT)
+    assert result["status"] == "complete"
+    assert result["mechanism_object"] == MECHANISM
 
 
 @pytest.mark.parametrize(
     "content",
     [
+        "[]",
+        '["entity", "user_context"]',
+        '"just a string"',
         "{}",
         '{"entity": "Trump"}',
-        '["entity", "user_context", "reasoning_paths"]',
-        '"just a string"',
-        '{"entity": "Trump", "user_context": "hospital business"}',
+        '{"entity": "Trump", "user_context": "hospitals"}',
         '{"entity": "Trump", "user_context": "hospitals", "reasoning_paths": []}',
     ],
 )
-def test_json_missing_required_keys_routes_to_clarification(monkeypatch, content):
-    monkeypatch.setattr(utils.ollama, "chat", _fake_chat(content))
-
-    result = parse_intent("Trump affects my hospital business")
-
+def test_json_without_usable_keys_needs_clarification(model_says, content):
+    model_says(content)
+    result = parse_intent(INTENT)
     assert result["status"] == "needs_clarification"
     assert result["questions"] == content
 
 
-def test_plain_text_questions_route_to_clarification(monkeypatch):
-    questions = "1. Which hospital? 2. What time horizon? 3. Policy or funding?"
-    monkeypatch.setattr(utils.ollama, "chat", _fake_chat(questions))
-
-    result = parse_intent("Trump affects my hospital business")
-
+def test_clarifying_questions_branch(model_says):
+    questions = "1. Which hospitals?\n2. What time horizon?"
+    model_says(questions)
+    result = parse_intent(INTENT)
     assert result["status"] == "needs_clarification"
-    assert result["questions"] == questions
-    assert result["history"][-1] == {"role": "assistant", "content": questions}
-    assert result["history"][0]["role"] == "user"
+    # history drops the system prompt, keeps the user turn + model reply
+    assert result["history"] == [
+        {"role": "user", "content": INTENT},
+        {"role": "assistant", "content": questions},
+    ]
 
 
-def test_clarification_history_is_replayed(monkeypatch):
-    monkeypatch.setattr(utils.ollama, "chat", _fake_chat("Which hospital?"))
-    first = parse_intent("Trump affects my hospital business")
+def test_clarification_round_trip_passes_history(model_says):
+    calls = model_says("Which hospitals?")
+    first = parse_intent(INTENT)
 
-    seen = {}
-
-    def chat(model, messages):
-        seen["messages"] = messages
-        return {"message": {"content": VALID_MECHANISM}, "prompt_eval_count": 1, "eval_count": 2}
-
-    monkeypatch.setattr(utils.ollama, "chat", chat)
-    second = parse_intent("A 200-bed hospital in Ohio", conversation_history=first["history"])
+    model_says(json.dumps(MECHANISM))
+    second = parse_intent("US hospitals, next 6 months", conversation_history=first["history"])
 
     assert second["status"] == "complete"
-    assert seen["messages"][0]["role"] == "system"
-    assert seen["messages"][-1]["content"] == "A 200-bed hospital in Ohio"
-    assert any(m["content"] == "Which hospital?" for m in seen["messages"])
+    sent = calls[-1]
+    assert sent[0]["role"] == "system"
+    assert sent[1:] == first["history"] + [
+        {"role": "user", "content": "US hospitals, next 6 months"}
+    ]
 
 
-def test_ollama_failure_returns_error_status(monkeypatch, tmp_path):
-    log_path = tmp_path / "failure_logs.jsonl"
-    monkeypatch.setattr(utils, "LOG_PATH", log_path)
-
-    def boom(model, messages):
+def test_ollama_failure_returns_error_and_logs(monkeypatch, isolated_runtime):
+    def _boom(model, messages):
         raise ConnectionError("connection refused")
 
-    monkeypatch.setattr(utils.ollama, "chat", boom)
+    monkeypatch.setattr(utils.ollama, "chat", _boom)
 
-    result = parse_intent("Trump affects my hospital business")
-
+    result = parse_intent(INTENT)
     assert result["status"] == "error"
     assert "connection refused" in result["error"]
-    assert "connection refused" in log_path.read_text()
+
+    entry = json.loads(isolated_runtime.read_text().strip())
+    assert entry["stage"] == "intent_decomposition"
+    assert "connection refused" in entry["output"]["error"]
+    assert entry["tokens"] == {"prompt": 0, "completion": 0, "total": 0}
+
+
+def test_raw_output_is_logged_verbatim(model_says, isolated_runtime):
+    raw = "```json\n" + json.dumps(MECHANISM) + "\n```"
+    model_says(raw)
+    parse_intent(INTENT)
+
+    entry = json.loads(isolated_runtime.read_text().strip())
+    assert entry["output"]["raw_output"] == raw
+    assert entry["input"] == {"user_input": INTENT, "history_len": 0}
