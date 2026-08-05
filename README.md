@@ -29,7 +29,38 @@ Paths to `prompts/` and `data/` are relative, so run from the repo root:
 python src/main.py
 ```
 
+## Local UI
+
+Run the dependency-free local cockpit:
+
+```bash
+python src/web_app.py
+```
+
+Open `http://127.0.0.1:8765`. It lets you create lenses, inspect their
+mechanisms, run digests, and give article-level feedback.
+The lens page also surfaces explainable tuning suggestions from repeated
+feedback; applying a suggestion requires confirmation and records the change
+in `tuning_history`.
+
 If the intent is ambiguous the parser asks 2-3 clarifying questions and loops.
+Lens creation validates the name before calling Ollama, then shows a live stage
+and elapsed-time page while intent decomposition runs. Each Ollama log entry in
+`data/logs.jsonl` also includes `duration_ms`, so slow model calls can be
+identified directly.
+
+Saved lenses ingest the configured RSS sources plus recent OpenAlex research
+papers by default. Each document is normalized with source type, publication
+date, authors, and provenance before ranking and classification. The OpenAlex
+lookback window and result limit can be changed in a lens JSON file under
+`data/lenses/`, for example:
+
+```json
+"source_config": {
+  "rss_urls": ["https://feeds.bbci.co.uk/news/world/rss.xml"],
+  "openalex": {"enabled": true, "lookback_days": 30, "max_results": 10}
+}
+```
 
 ## Tests
 

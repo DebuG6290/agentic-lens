@@ -5,3 +5,6 @@ __pycache__/
 .env
 data/logs.jsonl
 data/rss_cache/
+data/lenses/
+data/feedback/
+data/digests/

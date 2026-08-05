@@ -13,7 +13,7 @@ LOG_PATH = Path("data/logs.jsonl")
 MODEL = "llama3.2:latest"
 
 
-def _log(stage: str, input_data: dict, output_data: dict, tokens: dict):
+def _log(stage: str, input_data: dict, output_data: dict, tokens: dict, duration_ms=None):
     entry = {
         "timestamp": time.time(),
         "stage": stage,
@@ -21,6 +21,8 @@ def _log(stage: str, input_data: dict, output_data: dict, tokens: dict):
         "output": output_data,
         "tokens": tokens,
     }
+    if duration_ms is not None:
+        entry["duration_ms"] = round(duration_ms, 1)
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(LOG_PATH, "a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -57,7 +59,7 @@ def _try_parse_json(text: str):
         return None
 
 
-def call_ollama(stage: str, messages: list, input_data: dict) -> dict:
+def call_ollama(stage: str, messages: list, input_data: dict, progress_callback=None) -> dict:
     """
     Calls Ollama and returns {"ok": True, "text": str, "tokens": dict} or
     {"ok": False, "error": str, "tokens": dict} when the model/server is
@@ -65,16 +67,23 @@ def call_ollama(stage: str, messages: list, input_data: dict) -> dict:
     """
     zero_tokens = {"prompt": 0, "completion": 0, "total": 0}
 
+    started = time.perf_counter()
+    if progress_callback:
+        progress_callback(stage, "running")
     try:
         response = ollama.chat(model=MODEL, messages=messages)
     except Exception as e:
         error = f"{type(e).__name__}: {e}"
+        duration_ms = (time.perf_counter() - started) * 1000
         _log(
             stage=stage,
             input_data=input_data,
             output_data={"error": error},
             tokens=zero_tokens,
+            duration_ms=duration_ms,
         )
+        if progress_callback:
+            progress_callback(stage, "error", duration_ms)
         return {"ok": False, "error": error, "tokens": zero_tokens}
 
     text = response["message"]["content"]
@@ -84,11 +93,15 @@ def call_ollama(stage: str, messages: list, input_data: dict) -> dict:
     }
     tokens["total"] = tokens["prompt"] + tokens["completion"]
 
+    duration_ms = (time.perf_counter() - started) * 1000
     _log(
         stage=stage,
         input_data=input_data,
         output_data={"raw_output": text},
         tokens=tokens,
+        duration_ms=duration_ms,
     )
+    if progress_callback:
+        progress_callback(stage, "complete", duration_ms)
 
     return {"ok": True, "text": text, "tokens": tokens}

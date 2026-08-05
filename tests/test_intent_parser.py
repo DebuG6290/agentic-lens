@@ -41,6 +41,14 @@ def test_plain_json_is_complete(model_says):
     assert result["tokens"] == {"prompt": 10, "completion": 5, "total": 15}
 
 
+def test_very_short_initial_intent_gets_structured_clarification():
+    result = parse_intent("Track AI")
+
+    assert result["status"] == "needs_clarification"
+    assert len(result["questions"]) == 3
+    assert result["questions"][0]["options"][0]["label"] == "Government policy and regulation"
+
+
 @pytest.mark.parametrize(
     "wrapper",
     [
@@ -56,6 +64,16 @@ def test_fence_and_prose_stripping(model_says, wrapper):
     result = parse_intent(INTENT)
     assert result["status"] == "complete"
     assert result["mechanism_object"] == MECHANISM
+
+
+def test_malformed_json_gets_one_repair_attempt(model_says):
+    malformed = '{"entity": "Trump", "user_context": "hospital business", "reasoning_paths": [{"path": "healthcare policy", "keywords": ["medicaid"]}]'
+    calls = model_says(malformed)
+    result = parse_intent(INTENT)
+
+    assert result["status"] == "needs_clarification"
+    assert len(calls) == 2
+    assert "Repair it" in calls[-1][-1]["content"]
 
 
 @pytest.mark.parametrize(
@@ -87,6 +105,27 @@ def test_clarifying_questions_branch(model_says):
         {"role": "user", "content": INTENT},
         {"role": "assistant", "content": questions},
     ]
+
+
+def test_structured_clarification_is_normalised(model_says):
+    model_says(json.dumps({
+        "status": "needs_clarification",
+        "questions": [{
+            "id": "scope",
+            "question": "Which hospitals should count?",
+            "options": [
+                {"value": "us", "label": "US hospitals"},
+                {"value": "all", "label": "All hospitals"},
+            ],
+            "allow_custom": True,
+        }],
+    }))
+
+    result = parse_intent(INTENT)
+
+    assert result["status"] == "needs_clarification"
+    assert result["questions"][0]["options"][0]["label"] == "US hospitals"
+    assert result["questions"][0]["allow_custom"] is True
 
 
 def test_clarification_round_trip_passes_history(model_says):
